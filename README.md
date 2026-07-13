@@ -51,7 +51,7 @@ Para dados fictícios locais, execute `pnpm wrangler d1 execute pl330-companion 
 ```bash
 pnpm build
 pnpm wrangler secret put ADMIN_SECRET
-pnpm deploy
+pnpm run deploy
 ```
 
 O endereço esperado é `https://pl330-companion.<seu-subdominio>.workers.dev`. Atualize `APP_ORIGIN` em produção para esse endereço. Os crons estão em UTC no `wrangler.jsonc`; o handler mantém o último snapshot válido.
