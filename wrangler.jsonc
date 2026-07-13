@@ -4,7 +4,7 @@
   "main": "apps/worker/src/index.ts",
   "compatibility_date": "2025-07-01",
   "assets": { "directory": "apps/web/dist", "binding": "ASSETS", "not_found_handling": "single-page-application" },
-  "d1_databases": [{ "binding": "DB", "database_name": "pl330-companion", "database_id": "SUBSTITUA_PELO_ID_DO_D1", "migrations_dir": "migrations" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "pl330-companion", "database_id": "6746ad26-1f54-47bb-8861-1aec4c800a93", "migrations_dir": "migrations" }],
   "vars": { "APP_ORIGIN": "http://localhost:5173" },
   "triggers": { "crons": ["*/15 * * * *", "0 */3 * * *", "0 3 * * 1", "30 4 * * *"] },
   "observability": { "enabled": true }
