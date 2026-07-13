@@ -1,0 +1,3 @@
+-- DADOS FICTÍCIOS: use apenas no D1 local. Nunca aplique em produção.
+INSERT OR IGNORE INTO broadcasts (id, season, frequency_khz, start_utc_minutes, end_utc_minutes, days_json, day_expression_original, station_name, country_code, language_code, target_code, transmitter_code, transmitter_name, latitude, longitude, notes, source, source_row_hash, created_at)
+VALUES ('demo-rri', 'DEMO', 11780, 1200, 1260, '[0,1,2,3,4,5,6]', '', 'Registro fictício de demonstração', '---', 'P', 'SAm', 'demo', 'Transmissor demonstrativo', -22.9, -43.2, 'Não representa programação real', 'demo-local', 'demo-rri-hash', '2026-01-01T00:00:00Z');

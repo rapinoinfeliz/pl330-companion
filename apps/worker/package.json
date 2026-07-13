@@ -1,0 +1,14 @@
+{
+  "name": "@pl330/worker",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8788 --config ../../wrangler.jsonc",
+    "build": "wrangler deploy --dry-run --config ../../wrangler.jsonc",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": { "@pl330/shared": "workspace:*", "hono": "^4.8.0", "zod": "^3.25.0" },
+  "devDependencies": { "@cloudflare/workers-types": "^4.20250701.0", "typescript": "^5.8.3", "vitest": "^3.2.0" }
+}

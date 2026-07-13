@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "framework": "vite",
+  "build": { "command": "pnpm build", "outputDirectory": "apps/web/dist" },
+  "cloudflare": { "d1": { "binding": "DB", "migrationsDirectory": "migrations" }, "r2": null }
+}

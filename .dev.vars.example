@@ -1,0 +1,2 @@
+ADMIN_SECRET=troque-por-um-segredo-longo
+APP_ORIGIN=http://localhost:5173
