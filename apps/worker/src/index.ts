@@ -53,7 +53,12 @@ async function fetchEibi(path: string) {
 }
 async function readEibiText(path: string) {
   const response = await fetchEibi(path);
-  return new TextDecoder("windows-1252").decode(await response.arrayBuffer());
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  let text = "";
+  for (let index = 0; index < bytes.length; index += 8192) {
+    text += String.fromCharCode(...bytes.subarray(index, index + 8192));
+  }
+  return text;
 }
 app.post("/api/admin/refresh-noaa", async (c) => authorized(c) ? c.json(await refreshNoaa(c.env.DB)) : fail(c, 401, "UNAUTHORIZED", "Acesso administrativo inválido."));
 app.post("/api/admin/import-eibi", async (c) => {
