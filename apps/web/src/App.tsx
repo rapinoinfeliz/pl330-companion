@@ -51,6 +51,7 @@ import {
   RADIO_MODES,
   SearchSchema,
   SHORTWAVE_BANDS,
+  distanceAndBearing,
   formatFrequency,
   recommendBands,
   scoreBroadcast,
@@ -65,6 +66,7 @@ import { db, download, exportBackup, importBackup, toCsv } from "./db";
 const nav = [
   ["/", "Visão geral", Gauge],
   ["/identificar", "Identificar estação", Search],
+  ["/catalogo", "Catálogo de rádios", Database],
   ["/no-ar", "No ar agora", Radio],
   ["/diario", "Diário de escuta", BookOpen],
   ["/estatisticas", "Estatísticas", BarChart3],
@@ -74,6 +76,32 @@ const nav = [
 ] as const;
 
 type FrequencyUnit = "kHz" | "MHz";
+type CatalogBand = "FM" | "MW" | "SW";
+type CatalogStation = {
+  id: string;
+  name: string;
+  frequencyKHz: number;
+  band: CatalogBand;
+  mode: "FM" | "AM";
+  city: string;
+  state: string;
+  country: string;
+  status: string;
+  callsign?: string;
+  latitude?: number;
+  longitude?: number;
+  sourceLabel: string;
+};
+type RadioCatalog = {
+  generatedAt: string;
+  count: number;
+  stations: CatalogStation[];
+};
+const loadRadioCatalog = () =>
+  fetch("/radio-catalog-br.json").then((response) => {
+    if (!response.ok) throw new Error("Catálogo de rádios indisponível.");
+    return response.json() as Promise<RadioCatalog>;
+  });
 type IdentifyForm = Omit<SearchInput, "frequencyKHz"> & {
   frequency: number;
   unit: FrequencyUnit;
@@ -182,6 +210,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Overview />} />
             <Route path="/identificar" element={<Identify />} />
+            <Route path="/catalogo" element={<Catalog />} />
             <Route path="/no-ar" element={<OnAir />} />
             <Route path="/diario" element={<Logbook />} />
             <Route path="/estatisticas" element={<Stats />} />
@@ -256,21 +285,77 @@ function State({ error, empty = false }: { error?: unknown; empty?: boolean }) {
   );
 }
 
+const DEFAULT_LOCATION = { latitude: -27.3078, longitude: -50.5681 };
+
+function useSavedLocation() {
+  return useLiveQuery(async () => {
+    const [latitude, longitude] = await db.preferences.bulkGet([
+      "latitude",
+      "longitude",
+    ]);
+    const lat = Number(latitude?.value);
+    const lon = Number(longitude?.value);
+    return Number.isFinite(lat) && Number.isFinite(lon)
+      ? { latitude: lat, longitude: lon }
+      : DEFAULT_LOCATION;
+  }, [], DEFAULT_LOCATION);
+}
+
+function usePropagationSnapshot(location: { latitude: number; longitude: number }) {
+  const query = useQuery({
+    queryKey: ["weather-current"],
+    queryFn: () => api<any>("/api/space-weather/current"),
+  });
+  const kpSeries = (query.data?.data?.kpMinute || []).slice(-120);
+  const kp = latest(kpSeries, "estimated_kp");
+  const f107 = latest(query.data?.data?.f107Detail, "flux");
+  const alerts = (query.data?.data?.alerts || []).filter((alert: any) => {
+    const age =
+      Date.now() -
+      new Date(String(alert.issue_datetime).replace(" ", "T") + "Z").getTime();
+    return (
+      age >= 0 &&
+      age <= 48 * 3600_000 &&
+      !alert.message.startsWith("CANCEL") &&
+      /(ALERT|WARNING|WATCH)/i.test(alert.message)
+    );
+  }).length;
+  const solarElevationDeg =
+    (SunCalc.getPosition(new Date(), location.latitude, location.longitude)
+      .altitude *
+      180) /
+    Math.PI;
+  const isNight = solarElevationDeg < -6;
+  const kpTrend = seriesTrend(kpSeries, "estimated_kp");
+  return {
+    query,
+    kpSeries,
+    kp,
+    f107,
+    alerts,
+    solarElevationDeg,
+    isNight,
+    kpTrend,
+    recs: recommendBands({
+      isNight,
+      solarElevationDeg,
+      kp,
+      kpTrend,
+      f107,
+      alerts,
+    }),
+  };
+}
+
 function Overview() {
   const logs = useLiveQuery(
     () => db.logs.orderBy("listenedAtUtc").reverse().limit(4).toArray(),
     [],
     [],
   );
-  const weather = useQuery({
-    queryKey: ["weather-current"],
-    queryFn: () => api<any>("/api/space-weather/current"),
-  });
-  const kp = latest(weather.data?.data?.kpMinute, "estimated_kp");
-  const recs = recommendBands({
-    isNight: new Date().getHours() < 7 || new Date().getHours() >= 18,
-    kp,
-  });
+  const location = useSavedLocation();
+  const propagation = usePropagationSnapshot(location);
+  const { kp, recs } = propagation;
   const navigate = useNavigate();
   const [freq, setFreq] = useState("11780");
   const [unit, setUnit] = useState<FrequencyUnit>("kHz");
@@ -323,7 +408,7 @@ function Overview() {
             <span className="mb-1 text-mint">Kp atual</span>
           </div>
           <p className="mt-3 text-sm muted">
-            {weather.isError
+            {propagation.query.isError
               ? "Fonte indisponível; consulte o último cache offline."
               : kp != null && kp <= 3
                 ? "Atividade geomagnética relativamente baixa."
@@ -345,6 +430,18 @@ function Overview() {
           </Card>
         ))}
       </div>
+      <Card className="mt-5">
+        <h2 className="font-bold">O que o PL-330 consegue sintonizar</h2>
+        <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <div><b>LW</b><p className="muted">153–513 kHz · balizas e sinais de baixa frequência</p></div>
+          <div><b>MW / AM</b><p className="muted">520–1.710 kHz · radiodifusão regional</p></div>
+          <div><b>SW + SSB</b><p className="muted">1.711–29.999 kHz · emissoras mundiais, radioamadores e utilitários</p></div>
+          <div><b>FM</b><p className="muted">64–108 MHz · emissoras locais e regionais</p></div>
+        </div>
+        <p className="mt-3 text-xs muted">
+          Radioamadores, aviação, marítimo e outros serviços não têm uma grade fixa de “estações no ar”; o site mostra as faixas sintonizáveis sem prometer atividade.
+        </p>
+      </Card>
       <h2 className="mb-3 mt-8 text-xl font-bold">Últimas escutas</h2>
       {logs.length ? (
         <div className="grid gap-3 md:grid-cols-2">
@@ -377,6 +474,7 @@ function Identify() {
     },
   });
   const mutation = useMutation({ mutationFn: searchSchedules });
+  const savedLocation = useSavedLocation();
   const stations = useLiveQuery(
     () => db.localStations.orderBy("frequencyKHz").toArray(),
     [],
@@ -393,9 +491,43 @@ function Identify() {
   const frequency = Number(form.watch("frequency") || 0);
   const unit = form.watch("unit");
   const enteredKHz = unit === "MHz" ? frequency * 1000 : frequency;
-  const isFmSearch = enteredKHz > 30000;
+  const isFmSearch = enteredKHz >= 64000;
+  const catalog = useQuery({
+    queryKey: ["radio-catalog-br"],
+    queryFn: loadRadioCatalog,
+    enabled: lastSearchKHz != null,
+    staleTime: 24 * 3600_000,
+  });
+  const catalogTolerance = isFmSearch
+    ? 150
+    : Math.max(1, Number(form.watch("toleranceKHz") || 5));
+  const searchLocation = geo ?? savedLocation;
+  const catalogMatches = (catalog.data?.stations || [])
+    .filter(
+      (station) =>
+        lastSearchKHz != null &&
+        Math.abs(station.frequencyKHz - lastSearchKHz) <= catalogTolerance,
+    )
+    .map((station) => ({
+      ...station,
+      distanceKm:
+        station.latitude != null && station.longitude != null
+          ? distanceAndBearing(searchLocation, {
+              latitude: station.latitude,
+              longitude: station.longitude,
+            }).distanceKm
+          : undefined,
+    }))
+    .sort(
+      (a, b) =>
+        (a.distanceKm ?? Number.POSITIVE_INFINITY) -
+        (b.distanceKm ?? Number.POSITIVE_INFINITY),
+    )
+    .slice(0, 50);
   const localMatches = stations.filter(
-    (station) => Math.abs(station.frequencyKHz - enteredKHz) <= 150,
+    (station) =>
+      lastSearchKHz != null &&
+      Math.abs(station.frequencyKHz - lastSearchKHz) <= 150,
   );
 
   const submit = (values: IdentifyForm) => {
@@ -414,7 +546,7 @@ function Identify() {
     const payload = {
       ...values,
       frequencyKHz,
-      mode: frequencyKHz > 30000 ? ("FM" as const) : values.mode,
+      mode: frequencyKHz >= 64000 ? ("FM" as const) : values.mode,
       ...geo,
     };
     db.recentSearches.put({
@@ -423,6 +555,12 @@ function Identify() {
       frequencyKHz,
       payload,
     });
+    if (frequencyKHz > 30000 && frequencyKHz < 64000) {
+      setSearchError(
+        "O PL-330 não cobre a faixa entre 30 e 64 MHz. Use até 29.999 kHz ou FM a partir de 64 MHz.",
+      );
+      return;
+    }
     if (frequencyKHz <= 30000) {
       const { frequency: _frequency, unit: _unit, ...input } = payload;
       mutation.mutate(input);
@@ -432,7 +570,7 @@ function Identify() {
   };
 
   const addStation = async () => {
-    if (!newStation.name.trim() || !lastSearchKHz || lastSearchKHz <= 30000)
+    if (!newStation.name.trim() || !lastSearchKHz || lastSearchKHz < 64000)
       return;
     const now = new Date().toISOString();
     await db.localStations.add({
@@ -454,7 +592,7 @@ function Identify() {
 
   return (
     <>
-      <Title eyebrow="EiBi + catálogo local" title="Identificar estação">
+      <Title eyebrow="EiBi + catálogo oficial brasileiro" title="Identificar estação">
         <button
           className="btn-secondary"
           onClick={() => {
@@ -525,8 +663,8 @@ function Identify() {
             <div className="lg:col-span-2">
               <span className="label">Tipo de busca</span>
               <div className="flex min-h-12 items-center rounded-xl border border-mint/20 bg-mint/10 px-3 text-sm">
-                <Radio size={17} className="mr-2 text-mint" /> FM local ·
-                catálogo no dispositivo
+                <Radio size={17} className="mr-2 text-mint" /> FM · catálogo
+                oficial + suas emissoras
               </div>
             </div>
           ) : (
@@ -591,8 +729,8 @@ function Identify() {
         </form>
         <div className="mt-4 rounded-xl border border-white/10 bg-black/10 p-3 text-sm muted">
           {isFmSearch
-            ? "FM não faz parte da programação internacional EiBi. A busca usa seu catálogo local e permite cadastrar qualquer emissora da região."
-            : "Ondas curtas usam a programação EiBi por frequência, data e horário UTC. O resultado continua sendo uma possibilidade, não uma confirmação."}
+            ? "FM usa os dados abertos do MCom/Anatel, com mais de dez mil estações brasileiras, além das emissoras salvas neste dispositivo."
+            : "Ondas médias e curtas combinam estações brasileiras licenciadas com a programação mundial EiBi por frequência, data e horário UTC."}
         </div>
         {searchError && (
           <p className="mt-3 text-sm text-amber">{searchError}</p>
@@ -600,20 +738,23 @@ function Identify() {
       </Card>
 
       <div className="mt-6 space-y-3">
-        {lastSearchKHz && lastSearchKHz > 30000 ? (
+        {lastSearchKHz && lastSearchKHz >= 64000 ? (
           <>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-xl font-bold">
                 FM em {formatFrequency(lastSearchKHz)}
               </h2>
               <span className="chip">
-                {localMatches.length} correspondência(s) local(is)
+                {localMatches.length + catalogMatches.length} possibilidade(s)
               </span>
             </div>
             {localMatches.map((station) => (
               <LocalStationCard key={station.id} station={station} />
             ))}
-            {!localMatches.length && <State empty />}
+            {catalogMatches.map((station) => (
+              <CatalogStationCard key={station.id} station={station} />
+            ))}
+            {!localMatches.length && !catalogMatches.length && <State empty />}
             <Card className="border-dashed">
               <h3 className="font-bold">Adicionar emissora nesta frequência</h3>
               <p className="mt-1 text-sm muted">
@@ -661,16 +802,21 @@ function Identify() {
           </>
         ) : mutation.isError ? (
           <State error={mutation.error} />
-        ) : mutation.data?.data.length === 0 ? (
+        ) : mutation.data?.data.length === 0 && !catalogMatches.length ? (
           <State empty />
         ) : (
-          mutation.data?.data.map((broadcast) => (
-            <BroadcastCard
-              key={broadcast.id}
-              broadcast={broadcast}
-              input={mutation.variables!}
-            />
-          ))
+          <>
+            {catalogMatches.map((station) => (
+              <CatalogStationCard key={station.id} station={station} />
+            ))}
+            {mutation.data?.data.map((broadcast) => (
+              <BroadcastCard
+                key={broadcast.id}
+                broadcast={broadcast}
+                input={mutation.variables!}
+              />
+            ))}
+          </>
         )}
       </div>
     </>
@@ -823,6 +969,139 @@ function LocalStationCard({ station }: { station: LocalStation }) {
   );
 }
 
+function CatalogStationCard({
+  station,
+}: {
+  station: CatalogStation & { distanceKm?: number };
+}) {
+  const navigate = useNavigate();
+  return (
+    <Card>
+      <div className="flex flex-col justify-between gap-4 md:flex-row">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="frequency text-2xl">
+              {formatFrequency(station.frequencyKHz)}
+            </span>
+            <span className="chip">{station.band}</span>
+            <span className="chip">{station.sourceLabel}</span>
+          </div>
+          <h3 className="mt-2 text-xl font-bold">{station.name}</h3>
+          <p className="mt-1 text-sm muted">
+            {[station.city, station.state, station.country]
+              .filter(Boolean)
+              .join(" · ")}
+            {station.callsign ? ` · ${station.callsign}` : ""}
+          </p>
+          <p className="mt-2 text-sm muted">{station.status}</p>
+          {station.distanceKm != null && (
+            <p className="mt-1 text-sm text-mint">
+              Aproximadamente {station.distanceKm.toLocaleString("pt-BR")} km do local configurado
+            </p>
+          )}
+          {station.latitude != null && station.longitude != null && (
+            <p className="mt-1 text-xs muted">
+              Transmissor: {station.latitude.toFixed(4)}, {station.longitude.toFixed(4)}
+            </p>
+          )}
+        </div>
+        <button
+          className="btn-primary self-start"
+          onClick={() =>
+            navigate("/diario", {
+              state: { catalogStation: station, frequencyKHz: station.frequencyKHz },
+            })
+          }
+        >
+          <BookOpen size={18} />
+          Registrar escuta
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function Catalog() {
+  const catalog = useQuery({
+    queryKey: ["radio-catalog-br"],
+    queryFn: loadRadioCatalog,
+    staleTime: 24 * 3600_000,
+  });
+  const [query, setQuery] = useState("");
+  const [band, setBand] = useState<"ALL" | CatalogBand>("ALL");
+  const [state, setState] = useState("");
+  const stations = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase("pt-BR");
+    return (catalog.data?.stations || [])
+      .filter((station) => band === "ALL" || station.band === band)
+      .filter((station) => !state || station.state === state)
+      .filter(
+        (station) =>
+          !needle ||
+          `${station.name} ${station.city} ${station.state} ${station.callsign || ""} ${station.frequencyKHz}`
+            .toLocaleLowerCase("pt-BR")
+            .includes(needle),
+      )
+      .slice(0, 100);
+  }, [catalog.data, query, band, state]);
+  const states = useMemo(
+    () =>
+      [...new Set((catalog.data?.stations || []).map((station) => station.state).filter(Boolean))].sort(),
+    [catalog.data],
+  );
+  return (
+    <>
+      <Title eyebrow="Dados abertos MCom/Anatel" title="Catálogo de rádios" />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Metric label="Estações catalogadas" value={catalog.data?.count.toLocaleString("pt-BR") || "—"} />
+        <Metric label="Faixas" value="FM · MW · SW" />
+        <Metric
+          label="Atualização da fonte"
+          value={catalog.data ? new Date(catalog.data.generatedAt).toLocaleDateString("pt-BR") : "—"}
+        />
+      </div>
+      <Card className="mt-5">
+        <div className="grid gap-3 md:grid-cols-[1fr_160px_140px]">
+          <input
+            className="input"
+            placeholder="Nome, cidade, indicativo ou frequência…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <select className="input" value={band} onChange={(event) => setBand(event.target.value as "ALL" | CatalogBand)}>
+            <option value="ALL">Todas as faixas</option>
+            <option value="FM">FM</option>
+            <option value="MW">Ondas médias</option>
+            <option value="SW">Ondas curtas</option>
+          </select>
+          <select className="input" value={state} onChange={(event) => setState(event.target.value)}>
+            <option value="">Todo o Brasil</option>
+            {states.map((uf) => <option key={uf}>{uf}</option>)}
+          </select>
+        </div>
+        <p className="mt-3 text-xs muted">
+          Mostrando até 100 resultados. O catálogo contém estações autorizadas ou licenciadas; recepção depende de distância, relevo, potência, antena e propagação.
+        </p>
+      </Card>
+      {catalog.isLoading ? <State /> : catalog.isError ? <State error={catalog.error} /> : (
+        <div className="mt-5 space-y-3">
+          {stations.map((station) => <CatalogStationCard key={station.id} station={station} />)}
+          {!stations.length && <State empty />}
+        </div>
+      )}
+      <Card className="mt-5 border-dashed">
+        <h2 className="font-bold">E o Radio Garden?</h2>
+        <p className="mt-2 text-sm muted">
+          É um ótimo mapa de rádios online, mas um stream disponível na internet não prova que exista um sinal terrestre recebível pelo PL-330. Use-o como exploração complementar.
+        </p>
+        <a className="mt-3 inline-block text-mint underline" href="https://radio.garden/" target="_blank" rel="noreferrer">
+          Abrir Radio Garden <ExternalLink size={14} className="ml-1 inline" />
+        </a>
+      </Card>
+    </>
+  );
+}
+
 function OnAir() {
   const [offset, setOffset] = useState(0);
   const minute =
@@ -896,8 +1175,29 @@ function Logbook() {
     const state = route.state as {
       broadcast?: Broadcast;
       localStation?: LocalStation;
+      catalogStation?: CatalogStation;
       frequencyKHz?: number;
     } | null;
+    if (state?.catalogStation) {
+      setEditing({
+        ...blankLog(),
+        frequencyKHz:
+          state.frequencyKHz ?? state.catalogStation.frequencyKHz,
+        mode: state.catalogStation.mode,
+        stationId: state.catalogStation.id,
+        stationName: state.catalogStation.name,
+        country: state.catalogStation.country,
+        transmitter: [
+          state.catalogStation.city,
+          state.catalogStation.state,
+          state.catalogStation.callsign,
+        ]
+          .filter(Boolean)
+          .join("/"),
+        identificationSource: state.catalogStation.sourceLabel,
+      });
+      return;
+    }
     if (state?.localStation) {
       setEditing({
         ...blankLog(),
@@ -1367,39 +1667,24 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 }
 
 function Propagation() {
-  const [loc, setLoc] = useState({ latitude: -27.59, longitude: -48.55 });
-  const q = useQuery({
-    queryKey: ["weather-all"],
-    queryFn: () => api<any>("/api/space-weather/current"),
-  });
-  const kpSeries = (q.data?.data?.kpMinute || []).slice(-120);
-  const kp = latest(kpSeries, "estimated_kp");
-  const f107 = latest(q.data?.data?.f107Detail, "flux");
-  const activeAlerts = (q.data?.data?.alerts || []).filter((alert: any) => {
-    const age =
-      Date.now() -
-      new Date(String(alert.issue_datetime).replace(" ", "T") + "Z").getTime();
-    return (
-      age >= 0 &&
-      age <= 48 * 3600_000 &&
-      !alert.message.startsWith("CANCEL") &&
-      /(ALERT|WARNING|WATCH)/i.test(alert.message)
-    );
-  });
-  const alerts = activeAlerts.length;
-  const now = new Date();
-  const pos = SunCalc.getPosition(now, loc.latitude, loc.longitude);
-  const solarElevationDeg = (pos.altitude * 180) / Math.PI;
-  const isNight = solarElevationDeg < -6;
-  const kpTrend = seriesTrend(kpSeries, "estimated_kp");
-  const recs = recommendBands({
-    isNight,
-    solarElevationDeg,
+  const savedLocation = useSavedLocation();
+  const [manualLocation, setManualLocation] = useState<{
+    latitude: number;
+    longitude: number;
+  }>();
+  const loc = manualLocation ?? savedLocation;
+  const propagation = usePropagationSnapshot(loc);
+  const {
+    query: q,
+    kpSeries,
     kp,
-    kpTrend,
     f107,
     alerts,
-  });
+    solarElevationDeg,
+    isNight,
+    kpTrend,
+    recs,
+  } = propagation;
   const kpData = kpSeries
     .slice(-60)
     .map((item: any) => ({
@@ -1428,12 +1713,17 @@ function Propagation() {
         <button
           className="btn-secondary"
           onClick={() =>
-            navigator.geolocation.getCurrentPosition((position) =>
-              setLoc({
+            navigator.geolocation.getCurrentPosition((position) => {
+              const next = {
                 latitude: position.coords.latitude,
                 longitude: position.coords.longitude,
-              }),
-            )
+              };
+              setManualLocation(next);
+              void db.preferences.bulkPut([
+                { key: "latitude", value: next.latitude },
+                { key: "longitude", value: next.longitude },
+              ]);
+            })
           }
         >
           <MapPin size={17} />
@@ -1718,19 +2008,31 @@ function About() {
           </p>
         </Card>
         <Card>
-          <h2 className="font-bold">Catálogo FM local</h2>
+          <h2 className="font-bold">Catálogo brasileiro de radiodifusão</h2>
           <p className="mt-3 text-sm muted">
-            Emissoras FM ficam no navegador e podem ser cadastradas por você. A
-            Rádio Coroado 106,1 FM vem pré-cadastrada com atribuição à fonte
-            oficial da Fundação Frei Rogério.
+            FM, retransmissoras FM, rádios comunitárias, ondas médias e estações
+            brasileiras de ondas curtas/tropicais vêm dos dados abertos do
+            Ministério das Comunicações e da Anatel. A atualização é mensal.
           </p>
           <a
             className="mt-4 inline-block text-mint underline"
-            href="https://portalcoroado.com.br/home/institucional/"
+            href="https://www.gov.br/mcom/pt-br/acesso-a-informacao/dados-abertos"
             target="_blank"
             rel="noreferrer"
           >
-            Portal Coroado — fonte oficial
+            Bases abertas do MCom
+          </a>
+        </Card>
+        <Card>
+          <h2 className="font-bold">Diretórios de rádio online</h2>
+          <p className="mt-3 text-sm muted">
+            Radio Garden é indicado como exploração complementar. Sua API não é
+            oficial e seus streams não equivalem necessariamente a transmissões
+            terrestres recebíveis pelo PL-330, por isso não entram na pontuação
+            nem no catálogo técnico.
+          </p>
+          <a className="mt-4 inline-block text-mint underline" href="https://radio.garden/" target="_blank" rel="noreferrer">
+            Explorar Radio Garden
           </a>
         </Card>
         <Card>

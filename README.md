@@ -1,6 +1,6 @@
 # PL-330 Companion
 
-Aplicativo web instalável para identificação assistida de emissoras por programação EiBi, catálogo FM local, diário SWL local-first e acompanhamento de propagação com dados públicos da NOAA SWPC. Correspondências são possibilidades, nunca identificações garantidas.
+Aplicativo web instalável para identificação assistida de emissoras pela programação mundial EiBi e por um catálogo brasileiro aberto de FM, MW e SW, diário SWL local-first e acompanhamento de propagação com dados públicos da NOAA SWPC. Correspondências são possibilidades, nunca identificações garantidas.
 
 ## Arquitetura
 
@@ -97,6 +97,7 @@ docs                  decisões técnicas e operação
 ## Fontes e custos
 
 - [EiBi](https://www.eibispace.de/) — programação gratuita, com atribuição.
+- [Ministério das Comunicações](https://www.gov.br/mcom/pt-br/acesso-a-informacao/dados-abertos) — bases abertas SCR, RADCOM e SRD para FM, ondas médias e estações OC/OT.
 - [NOAA SWPC](https://www.swpc.noaa.gov/) — Kp, F10.7, escalas e alertas públicos.
 - Stack integralmente gratuita e de código aberto; licença MIT.
 

@@ -4,4 +4,6 @@ EiBi é baixada do CSV semicolon-separated da temporada anunciada na página pri
 
 NOAA SWPC usa adaptadores separados: Kp de 3 horas (`Kp`), Kp de 1 minuto (`estimated_kp`), previsão (`kp`), fluxo de 30 dias, medições detalhadas F10.7, alertas e escalas indexadas por dia. Coleta e observação são preservadas separadamente.
 
-Emissoras FM não pertencem à EiBi. O catálogo FM é local ao navegador. A Rádio Coroado 106,1 FM é fornecida como registro inicial com atribuição à página institucional oficial do Portal Coroado; outros registros são cadastrados pelo próprio usuário e entram no backup local.
+Emissoras FM e MW brasileiras vêm das bases abertas SCR do Ministério das Comunicações/Anatel. Rádios comunitárias vêm da base RADCOM, com a frequência derivada da canalização oficial; estações brasileiras OC/OT vêm do SRD. O gerador `scripts/update-radio-catalog.py` filtra faixas cobertas pelo PL-330, remove canais vagos/excluídos, deduplica e publica um JSON compacto. Um workflow mensal atualiza o arquivo e o push aciona o deploy da Cloudflare.
+
+O Radio Garden é apenas uma referência complementar de streams online. A especificação OpenAPI encontrada é comunitária e não oficial, e a presença de um stream não comprova uma transmissão terrestre recebível. Por isso esses dados não são misturados ao catálogo técnico nem à pontuação.
