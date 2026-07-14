@@ -17,11 +17,14 @@ import {
   BookOpen,
   Clock3,
   CloudSun,
+  Database,
   Download,
+  ExternalLink,
   Gauge,
   Heart,
   Info,
   Menu,
+  MapPin,
   Moon,
   Radio,
   Search,
@@ -52,6 +55,7 @@ import {
   recommendBands,
   scoreBroadcast,
   type Broadcast,
+  type LocalStation,
   type LogEntry,
   type SearchInput,
 } from "@pl330/shared";
@@ -68,6 +72,12 @@ const nav = [
   ["/configuracoes", "Configurações", Settings],
   ["/sobre", "Sobre e fontes", Info],
 ] as const;
+
+type FrequencyUnit = "kHz" | "MHz";
+type IdentifyForm = Omit<SearchInput, "frequencyKHz"> & {
+  frequency: number;
+  unit: FrequencyUnit;
+};
 
 export default function App() {
   const [menu, setMenu] = useState(false);
@@ -263,6 +273,7 @@ function Overview() {
   });
   const navigate = useNavigate();
   const [freq, setFreq] = useState("11780");
+  const [unit, setUnit] = useState<FrequencyUnit>("kHz");
   return (
     <>
       <Title eyebrow="Central de escuta" title="O que vale sintonizar agora" />
@@ -270,17 +281,30 @@ function Overview() {
         <Card className="bg-gradient-to-br from-panel to-emerald-950/60">
           <p className="label">Busca rápida</p>
           <div className="flex flex-col gap-3 sm:flex-row">
-            <input
-              className="input frequency text-3xl"
-              value={freq}
-              onChange={(e) => setFreq(e.target.value)}
-              inputMode="decimal"
-              aria-label="Frequência em kHz"
-            />
+            <div className="flex min-w-0 flex-1 gap-2">
+              <input
+                className="input frequency min-w-0 text-3xl"
+                value={freq}
+                onChange={(e) => setFreq(e.target.value)}
+                inputMode="decimal"
+                aria-label={`Frequência em ${unit}`}
+              />
+              <select
+                className="input w-28"
+                value={unit}
+                onChange={(e) => setUnit(e.target.value as FrequencyUnit)}
+                aria-label="Unidade da frequência"
+              >
+                <option>kHz</option>
+                <option>MHz</option>
+              </select>
+            </div>
             <button
               className="btn-primary"
               onClick={() =>
-                navigate(`/identificar?frequency=${encodeURIComponent(freq)}`)
+                navigate(
+                  `/identificar?frequency=${encodeURIComponent(freq)}&unit=${unit}`,
+                )
               }
             >
               <Search size={18} />
@@ -288,8 +312,8 @@ function Overview() {
             </button>
           </div>
           <p className="mt-3 text-sm muted">
-            Digite a frequência do visor do rádio em kHz. Os resultados são
-            possibilidades, não identificações confirmadas.
+            Use kHz para ondas curtas e MHz para FM. Ex.: 11.780 kHz ou 106,1
+            MHz.
           </p>
         </Card>
         <Card>
@@ -313,7 +337,7 @@ function Overview() {
           <Card key={b.name}>
             <span className="frequency text-2xl">{b.name}</span>
             <div className="mt-2 text-sm font-semibold">
-              {b.score}/100 · heurística
+              {b.score}/100 · {b.verdict}
             </div>
             <p className="mt-2 text-sm muted">
               {b.reasons[0]}; {b.reasons[1]}.
@@ -337,40 +361,107 @@ function Overview() {
 
 function Identify() {
   const params = new URLSearchParams(location.search);
-  const form = useForm<SearchInput>({
-    resolver: zodResolver(SearchSchema) as any,
+  const initialUnit: FrequencyUnit =
+    params.get("unit") === "MHz" ? "MHz" : "kHz";
+  const form = useForm<IdentifyForm>({
     defaultValues: {
-      frequencyKHz: Number(params.get("frequency") || 11780),
+      frequency: Number(
+        params.get("frequency") || (initialUnit === "MHz" ? 106.1 : 11780),
+      ),
+      unit: initialUnit,
       dateTimeUtc: new Date().toISOString(),
       toleranceKHz: 5,
-      mode: "AM",
+      mode: initialUnit === "MHz" ? "FM" : "AM",
       limit: 30,
       offset: 0,
     },
   });
   const mutation = useMutation({ mutationFn: searchSchedules });
+  const stations = useLiveQuery(
+    () => db.localStations.orderBy("frequencyKHz").toArray(),
+    [],
+    [],
+  );
   const [geo, setGeo] = useState<{ latitude: number; longitude: number }>();
-  const submit = (v: SearchInput) => {
-    const input = { ...v, ...geo };
+  const [lastSearchKHz, setLastSearchKHz] = useState<number>();
+  const [searchError, setSearchError] = useState("");
+  const [newStation, setNewStation] = useState({
+    name: "",
+    city: "",
+    state: "",
+  });
+  const frequency = Number(form.watch("frequency") || 0);
+  const unit = form.watch("unit");
+  const enteredKHz = unit === "MHz" ? frequency * 1000 : frequency;
+  const isFmSearch = enteredKHz > 30000;
+  const localMatches = stations.filter(
+    (station) => Math.abs(station.frequencyKHz - enteredKHz) <= 150,
+  );
+
+  const submit = (values: IdentifyForm) => {
+    const frequencyKHz =
+      values.unit === "MHz" ? values.frequency * 1000 : values.frequency;
+    setSearchError("");
+    if (
+      !Number.isFinite(frequencyKHz) ||
+      frequencyKHz < 10 ||
+      frequencyKHz > 300000
+    ) {
+      setSearchError("Informe uma frequência válida entre 10 kHz e 300 MHz.");
+      return;
+    }
+    setLastSearchKHz(frequencyKHz);
+    const payload = {
+      ...values,
+      frequencyKHz,
+      mode: frequencyKHz > 30000 ? ("FM" as const) : values.mode,
+      ...geo,
+    };
     db.recentSearches.put({
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
-      frequencyKHz: v.frequencyKHz,
-      payload: input,
+      frequencyKHz,
+      payload,
     });
-    mutation.mutate(input);
+    if (frequencyKHz <= 30000) {
+      const { frequency: _frequency, unit: _unit, ...input } = payload;
+      mutation.mutate(input);
+    } else {
+      mutation.reset();
+    }
   };
+
+  const addStation = async () => {
+    if (!newStation.name.trim() || !lastSearchKHz || lastSearchKHz <= 30000)
+      return;
+    const now = new Date().toISOString();
+    await db.localStations.add({
+      id: crypto.randomUUID(),
+      name: newStation.name.trim(),
+      frequencyKHz: lastSearchKHz,
+      mode: "FM",
+      city: newStation.city.trim(),
+      state: newStation.state.trim(),
+      country: "Brasil",
+      sourceLabel: "adicionada por você",
+      notes: "",
+      builtIn: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    setNewStation({ name: "", city: "", state: "" });
+  };
+
   return (
     <>
-      <Title
-        eyebrow="EiBi · correspondência explicável"
-        title="Identificar estação"
-      >
+      <Title eyebrow="EiBi + catálogo local" title="Identificar estação">
         <button
           className="btn-secondary"
           onClick={() => {
             form.reset();
             mutation.reset();
+            setLastSearchKHz(undefined);
+            setSearchError("");
           }}
         >
           Limpar
@@ -381,21 +472,32 @@ function Identify() {
           onSubmit={form.handleSubmit(submit)}
           className="grid gap-4 md:grid-cols-2 lg:grid-cols-6"
         >
-          <Field
-            label="Frequência kHz"
-            error={form.formState.errors.frequencyKHz?.message}
-          >
-            <input
-              className="input frequency text-xl"
-              type="number"
-              step="0.001"
-              {...form.register("frequencyKHz")}
-            />
-          </Field>
-          <Field
-            label="Data e hora UTC"
-            error={form.formState.errors.dateTimeUtc?.message}
-          >
+          <label>
+            <span className="label">Frequência</span>
+            <div className="flex gap-2">
+              <input
+                className="input frequency min-w-0 text-xl"
+                type="number"
+                step="0.001"
+                {...form.register("frequency", { valueAsNumber: true })}
+              />
+              <select
+                className="input w-28"
+                {...form.register("unit")}
+                onChange={(e) => {
+                  const next = e.target.value as FrequencyUnit;
+                  form.setValue("unit", next);
+                  if (next === "MHz") form.setValue("mode", "FM");
+                  else if (form.getValues("mode") === "FM")
+                    form.setValue("mode", "AM");
+                }}
+              >
+                <option>kHz</option>
+                <option>MHz</option>
+              </select>
+            </div>
+          </label>
+          <Field label="Data e hora UTC">
             <input
               className="input"
               type="datetime-local"
@@ -409,27 +511,43 @@ function Identify() {
             />
           </Field>
           <Field label="Modo">
-            <select className="input" {...form.register("mode")}>
-              {RADIO_MODES.map((m) => (
-                <option key={m}>{m}</option>
+            <select
+              className="input"
+              {...form.register("mode")}
+              disabled={isFmSearch}
+            >
+              {RADIO_MODES.map((mode) => (
+                <option key={mode}>{mode}</option>
               ))}
             </select>
           </Field>
-          <Field label="Tolerância kHz">
-            <input
-              className="input"
-              type="number"
-              step="0.1"
-              {...form.register("toleranceKHz")}
-            />
-          </Field>
-          <Field label="Idioma (código)">
-            <input
-              className="input"
-              placeholder="P, E, S…"
-              {...form.register("language")}
-            />
-          </Field>
+          {isFmSearch ? (
+            <div className="lg:col-span-2">
+              <span className="label">Tipo de busca</span>
+              <div className="flex min-h-12 items-center rounded-xl border border-mint/20 bg-mint/10 px-3 text-sm">
+                <Radio size={17} className="mr-2 text-mint" /> FM local ·
+                catálogo no dispositivo
+              </div>
+            </div>
+          ) : (
+            <>
+              <Field label="Tolerância kHz">
+                <input
+                  className="input"
+                  type="number"
+                  step="0.1"
+                  {...form.register("toleranceKHz", { valueAsNumber: true })}
+                />
+              </Field>
+              <Field label="Idioma (código)">
+                <input
+                  className="input"
+                  placeholder="P, E, S…"
+                  {...form.register("language")}
+                />
+              </Field>
+            </>
+          )}
           <div className="flex items-end">
             <button
               className="btn-primary w-full"
@@ -465,23 +583,91 @@ function Identify() {
             </button>
             {geo && (
               <span className="chip">
-                Localização ativa · {geo.latitude.toFixed(2)},{" "}
-                {geo.longitude.toFixed(2)}
+                <MapPin size={13} className="mr-1" />
+                {geo.latitude.toFixed(2)}, {geo.longitude.toFixed(2)}
               </span>
             )}
           </div>
         </form>
+        <div className="mt-4 rounded-xl border border-white/10 bg-black/10 p-3 text-sm muted">
+          {isFmSearch
+            ? "FM não faz parte da programação internacional EiBi. A busca usa seu catálogo local e permite cadastrar qualquer emissora da região."
+            : "Ondas curtas usam a programação EiBi por frequência, data e horário UTC. O resultado continua sendo uma possibilidade, não uma confirmação."}
+        </div>
+        {searchError && (
+          <p className="mt-3 text-sm text-amber">{searchError}</p>
+        )}
       </Card>
+
       <div className="mt-6 space-y-3">
-        {mutation.isError ? (
+        {lastSearchKHz && lastSearchKHz > 30000 ? (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-xl font-bold">
+                FM em {formatFrequency(lastSearchKHz)}
+              </h2>
+              <span className="chip">
+                {localMatches.length} correspondência(s) local(is)
+              </span>
+            </div>
+            {localMatches.map((station) => (
+              <LocalStationCard key={station.id} station={station} />
+            ))}
+            {!localMatches.length && <State empty />}
+            <Card className="border-dashed">
+              <h3 className="font-bold">Adicionar emissora nesta frequência</h3>
+              <p className="mt-1 text-sm muted">
+                O cadastro fica apenas neste dispositivo e entra no seu backup.
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-4">
+                <input
+                  className="input sm:col-span-2"
+                  placeholder="Nome da emissora"
+                  value={newStation.name}
+                  onChange={(e) =>
+                    setNewStation({ ...newStation, name: e.target.value })
+                  }
+                />
+                <input
+                  className="input"
+                  placeholder="Cidade"
+                  value={newStation.city}
+                  onChange={(e) =>
+                    setNewStation({ ...newStation, city: e.target.value })
+                  }
+                />
+                <input
+                  className="input"
+                  placeholder="UF"
+                  maxLength={2}
+                  value={newStation.state}
+                  onChange={(e) =>
+                    setNewStation({
+                      ...newStation,
+                      state: e.target.value.toUpperCase(),
+                    })
+                  }
+                />
+              </div>
+              <button
+                className="btn-primary mt-3"
+                onClick={addStation}
+                disabled={!newStation.name.trim()}
+              >
+                <Database size={17} />
+                Salvar no catálogo local
+              </button>
+            </Card>
+          </>
+        ) : mutation.isError ? (
           <State error={mutation.error} />
         ) : mutation.data?.data.length === 0 ? (
           <State empty />
         ) : (
-          mutation.data?.data.map((b) => (
+          mutation.data?.data.map((broadcast) => (
             <BroadcastCard
-              key={b.id}
-              broadcast={b}
+              key={broadcast.id}
+              broadcast={broadcast}
               input={mutation.variables!}
             />
           ))
@@ -569,6 +755,74 @@ function BroadcastCard({
   );
 }
 
+function LocalStationCard({ station }: { station: LocalStation }) {
+  const navigate = useNavigate();
+  return (
+    <Card className="border-mint/20">
+      <div className="flex flex-col justify-between gap-4 md:flex-row">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="frequency text-2xl">
+              {formatFrequency(station.frequencyKHz)}
+            </span>
+            <span className="chip">
+              <Database size={13} className="mr-1" />
+              {station.sourceLabel}
+            </span>
+          </div>
+          <h3 className="mt-2 text-xl font-bold">{station.name}</h3>
+          <p className="mt-1 text-sm muted">
+            {[station.city, station.state, station.country]
+              .filter(Boolean)
+              .join(" · ")}{" "}
+            · FM
+          </p>
+          {station.notes && (
+            <p className="mt-3 text-sm muted">{station.notes}</p>
+          )}
+          <div className="mt-3 flex flex-wrap gap-3 text-sm">
+            {station.website && (
+              <a
+                className="text-mint underline"
+                href={station.website}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink size={14} className="mr-1 inline" />
+                Site da emissora
+              </a>
+            )}
+            {station.source && (
+              <a
+                className="text-mint underline"
+                href={station.source}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Verificar fonte
+              </a>
+            )}
+          </div>
+        </div>
+        <button
+          className="btn-primary self-start"
+          onClick={() =>
+            navigate("/diario", {
+              state: {
+                localStation: station,
+                frequencyKHz: station.frequencyKHz,
+              },
+            })
+          }
+        >
+          <BookOpen size={18} />
+          Registrar escuta
+        </button>
+      </div>
+    </Card>
+  );
+}
+
 function OnAir() {
   const [offset, setOffset] = useState(0);
   const minute =
@@ -639,7 +893,26 @@ function Logbook() {
   const [editing, setEditing] = useState<LogEntry>();
   const [view, setView] = useState<"cards" | "table">("cards");
   useEffect(() => {
-    const state = route.state as { broadcast?: Broadcast; frequencyKHz?: number } | null;
+    const state = route.state as {
+      broadcast?: Broadcast;
+      localStation?: LocalStation;
+      frequencyKHz?: number;
+    } | null;
+    if (state?.localStation) {
+      setEditing({
+        ...blankLog(),
+        frequencyKHz: state.frequencyKHz ?? state.localStation.frequencyKHz,
+        mode: "FM",
+        stationId: state.localStation.id,
+        stationName: state.localStation.name,
+        country: state.localStation.country,
+        transmitter: [state.localStation.city, state.localStation.state]
+          .filter(Boolean)
+          .join("/"),
+        identificationSource: state.localStation.sourceLabel,
+      });
+      return;
+    }
     if (!state?.broadcast) return;
     setEditing({
       ...blankLog(),
@@ -648,7 +921,8 @@ function Logbook() {
       stationName: state.broadcast.stationName,
       country: state.broadcast.countryCode,
       language: state.broadcast.languageCode,
-      transmitter: state.broadcast.transmitterName ?? state.broadcast.transmitterCode,
+      transmitter:
+        state.broadcast.transmitterName ?? state.broadcast.transmitterCode,
       identificationSource: `EiBi ${state.broadcast.season}`,
     });
   }, [route.key]);
@@ -1098,47 +1372,105 @@ function Propagation() {
     queryKey: ["weather-all"],
     queryFn: () => api<any>("/api/space-weather/current"),
   });
-  const kp = latest(q.data?.data?.kpMinute, "estimated_kp");
+  const kpSeries = (q.data?.data?.kpMinute || []).slice(-120);
+  const kp = latest(kpSeries, "estimated_kp");
   const f107 = latest(q.data?.data?.f107Detail, "flux");
-  const alerts = (q.data?.data?.alerts || []).filter(
-    (a: any) => !a.message.startsWith("CANCEL"),
-  ).length;
-  const pos = SunCalc.getPosition(new Date(), loc.latitude, loc.longitude);
-  const isNight = pos.altitude < -0.1047;
-  const recs = recommendBands({ isNight, kp, f107, alerts });
-  const kpData = (q.data?.data?.kpMinute || [])
+  const activeAlerts = (q.data?.data?.alerts || []).filter((alert: any) => {
+    const age =
+      Date.now() -
+      new Date(String(alert.issue_datetime).replace(" ", "T") + "Z").getTime();
+    return (
+      age >= 0 &&
+      age <= 48 * 3600_000 &&
+      !alert.message.startsWith("CANCEL") &&
+      /(ALERT|WARNING|WATCH)/i.test(alert.message)
+    );
+  });
+  const alerts = activeAlerts.length;
+  const now = new Date();
+  const pos = SunCalc.getPosition(now, loc.latitude, loc.longitude);
+  const solarElevationDeg = (pos.altitude * 180) / Math.PI;
+  const isNight = solarElevationDeg < -6;
+  const kpTrend = seriesTrend(kpSeries, "estimated_kp");
+  const recs = recommendBands({
+    isNight,
+    solarElevationDeg,
+    kp,
+    kpTrend,
+    f107,
+    alerts,
+  });
+  const kpData = kpSeries
     .slice(-60)
-    .map((x: any) => ({ time: x.time_tag.slice(11, 16), kp: x.estimated_kp }));
+    .map((item: any) => ({
+      time: item.time_tag.slice(11, 16),
+      kp: item.estimated_kp,
+    }));
+  const collectedAt = newestTimestamp(q.data?.snapshots || [], "collected_at");
+  const ageMinutes = collectedAt
+    ? Math.max(
+        0,
+        Math.round((Date.now() - new Date(collectedAt).getTime()) / 60000),
+      )
+    : undefined;
+  const freshness =
+    ageMinutes == null
+      ? "indisponível"
+      : ageMinutes <= 30
+        ? "atualizado"
+        : ageMinutes <= 180
+          ? "atenção à idade"
+          : "desatualizado";
+
   return (
     <>
-      <Title eyebrow="NOAA SWPC · último snapshot válido" title="Propagação">
+      <Title eyebrow="NOAA SWPC · leitura contextual" title="Propagação">
         <button
           className="btn-secondary"
           onClick={() =>
-            navigator.geolocation.getCurrentPosition((p) =>
+            navigator.geolocation.getCurrentPosition((position) =>
               setLoc({
-                latitude: p.coords.latitude,
-                longitude: p.coords.longitude,
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
               }),
             )
           }
         >
+          <MapPin size={17} />
           Usar minha localização
         </button>
       </Title>
       {q.isError && <State error={q.error} />}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Metric label="Kp atual" value={kp ?? "—"} />
-        <Metric label="Fluxo F10.7 sfu" value={f107 ?? "—"} />
-        <Metric label="Alertas ativos" value={alerts} />
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Metric label="Kp atual" value={kp?.toFixed(1) ?? "—"} />
+        <Metric
+          label="Tendência Kp"
+          value={
+            kpTrend == null
+              ? "—"
+              : kpTrend > 0.35
+                ? "subindo"
+                : kpTrend < -0.35
+                  ? "caindo"
+                  : "estável"
+          }
+        />
+        <Metric label="Fluxo F10.7 (sfu)" value={f107?.toFixed(0) ?? "—"} />
+        <Metric label="Alertas recentes" value={alerts} />
       </div>
       <div className="mt-5 grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
         <Card>
-          <div className="flex justify-between">
-            <h2 className="font-bold">Kp recente</h2>
+          <div className="flex flex-wrap justify-between gap-2">
+            <div>
+              <h2 className="font-bold">Kp recente</h2>
+              <p className="mt-1 text-xs muted">
+                Estimativa de 1 minuto; oscilações curtas não garantem mudança
+                audível.
+              </p>
+            </div>
             <span className="chip">
-              {isNight ? "Noite" : "Dia"} no local · Sol{" "}
-              {((pos.altitude * 180) / Math.PI).toFixed(1)}°
+              {isNight ? "Noite" : solarElevationDeg < 3 ? "Crepúsculo" : "Dia"}{" "}
+              · Sol {solarElevationDeg.toFixed(1)}°
             </span>
           </div>
           <div className="mt-4 h-64">
@@ -1158,44 +1490,88 @@ function Propagation() {
           </div>
         </Card>
         <Card>
-          <h2 className="mb-3 font-bold">Estado da fonte</h2>
-          <p className="text-sm muted">
-            {q.data?.snapshots?.[0]?.collected_at
-              ? `Coletado em ${new Date(q.data.snapshots[0].collected_at).toLocaleString("pt-BR")}.`
-              : "Ainda sem snapshot local."}
-          </p>
-          <p className="mt-3 text-sm muted">
-            Observação e coleta são horários distintos. Em falhas, o painel usa
-            o último dado conhecido e marca a idade.
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold">Qualidade dos dados</h2>
+            <span className="chip">{freshness}</span>
+          </div>
+          <div className="mt-4 space-y-3 text-sm">
+            <div className="flex justify-between border-b border-white/10 pb-2">
+              <span className="muted">Última coleta</span>
+              <b>{ageMinutes == null ? "—" : "há " + ageMinutes + " min"}</b>
+            </div>
+            <div className="flex justify-between border-b border-white/10 pb-2">
+              <span className="muted">Local avaliado</span>
+              <b>
+                {loc.latitude.toFixed(2)}, {loc.longitude.toFixed(2)}
+              </b>
+            </div>
+            <div className="flex justify-between border-b border-white/10 pb-2">
+              <span className="muted">Sinais usados</span>
+              <b>Sol, Kp, tendência, F10.7 e alertas</b>
+            </div>
+          </div>
+          <p className="mt-4 text-xs muted">
+            A nota compara bandas entre si neste momento. Ela não é uma
+            porcentagem de chance de recepção.
           </p>
         </Card>
       </div>
-      <h2 className="mb-3 mt-8 text-xl font-bold">
-        Bandas para experimentar agora
-      </h2>
+
+      <div className="mb-3 mt-8 flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h2 className="text-xl font-bold">Bandas para experimentar agora</h2>
+          <p className="mt-1 text-sm muted">
+            Ordenadas por adequação relativa às condições atuais.
+          </p>
+        </div>
+        <span className="chip">notas deliberadamente diferenciadas</span>
+      </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {recs.slice(0, 6).map((b) => (
-          <Card key={b.name}>
-            <div className="flex justify-between">
-              <span className="frequency text-2xl">{b.name}</span>
-              <b>{b.score}/100</b>
+        {recs.slice(0, 9).map((band) => (
+          <Card key={band.name}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <span className="frequency text-2xl">{band.name}</span>
+                <p className="mt-1 text-xs muted">
+                  {formatFrequency(band.minKHz)}–{formatFrequency(band.maxKHz)}
+                </p>
+              </div>
+              <div className="text-right">
+                <b className="text-xl">{band.score}</b>
+                <div className="text-[10px] uppercase tracking-wider text-mint">
+                  {band.verdict}
+                </div>
+              </div>
             </div>
-            <p className="mt-2 text-sm muted">{b.reasons.join("; ")}.</p>
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-mint"
+                style={{ width: String(band.score) + "%" }}
+              />
+            </div>
+            <ul className="mt-3 space-y-1 text-sm muted">
+              {band.reasons.slice(0, 3).map((reason) => (
+                <li key={reason}>• {reason}</li>
+              ))}
+            </ul>
           </Card>
         ))}
       </div>
       <p className="mt-4 text-xs muted">
-        Heurísticas experimentais, não previsão garantida. A recepção real
-        depende de potência, antena, ruído, trajetória, estação, horário e
-        ionosfera.
+        Heurística experimental, não previsão garantida. Potência, antena, ruído
+        local, trajetória, distância e estação continuam decisivos.
       </p>
     </>
   );
 }
-
 function SettingsPage() {
   const [lat, setLat] = useState("");
   const [lon, setLon] = useState("");
+  const stations = useLiveQuery(
+    () => db.localStations.orderBy("frequencyKHz").toArray(),
+    [],
+    [],
+  );
   return (
     <>
       <Title eyebrow="Preferências locais" title="Configurações" />
@@ -1248,6 +1624,50 @@ function SettingsPage() {
             Apagar todos os dados locais
           </button>
         </Card>
+        <Card className="lg:col-span-2">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 className="font-bold">Catálogo de emissoras locais</h2>
+              <p className="mt-1 text-sm muted">
+                Usado nas buscas FM; emissoras adicionadas por você entram no
+                backup.
+              </p>
+            </div>
+            <NavLink className="btn-secondary" to="/identificar">
+              <Search size={17} />
+              Buscar ou adicionar
+            </NavLink>
+          </div>
+          <div className="mt-4 divide-y divide-white/10">
+            {stations.map((station) => (
+              <div
+                key={station.id}
+                className="flex flex-wrap items-center justify-between gap-3 py-3"
+              >
+                <div>
+                  <b>{station.name}</b>
+                  <p className="text-sm muted">
+                    {formatFrequency(station.frequencyKHz)} ·{" "}
+                    {[station.city, station.state].filter(Boolean).join("/")}
+                  </p>
+                </div>
+                {station.builtIn ? (
+                  <span className="chip">fonte oficial</span>
+                ) : (
+                  <button
+                    className="btn-secondary"
+                    onClick={() =>
+                      confirm("Remover esta emissora do catálogo local?") &&
+                      db.localStations.delete(station.id)
+                    }
+                  >
+                    Remover
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     </>
   );
@@ -1298,6 +1718,22 @@ function About() {
           </p>
         </Card>
         <Card>
+          <h2 className="font-bold">Catálogo FM local</h2>
+          <p className="mt-3 text-sm muted">
+            Emissoras FM ficam no navegador e podem ser cadastradas por você. A
+            Rádio Coroado 106,1 FM vem pré-cadastrada com atribuição à fonte
+            oficial da Fundação Frei Rogério.
+          </p>
+          <a
+            className="mt-4 inline-block text-mint underline"
+            href="https://portalcoroado.com.br/home/institucional/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Portal Coroado — fonte oficial
+          </a>
+        </Card>
+        <Card>
           <h2 className="font-bold">Limitações do MVP</h2>
           <p className="mt-3 text-sm muted">
             Sem controle CAT do rádio, contas ou sincronização. Coordenadas só
@@ -1313,9 +1749,41 @@ function minutes(v: number) {
   return `${String(Math.floor(v / 60) % 24).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
 }
 function latest(data: any[], key: string) {
-  return Array.isArray(data) && data.length
-    ? Number(data[data.length - 1]?.[key])
-    : undefined;
+  if (!Array.isArray(data) || !data.length) return undefined;
+  const newest = [...data]
+    .sort(
+      (a, b) =>
+        new Date(a.time_tag ?? a.issue_datetime ?? 0).getTime() -
+        new Date(b.time_tag ?? b.issue_datetime ?? 0).getTime(),
+    )
+    .at(-1);
+  const value = Number(newest?.[key]);
+  return Number.isFinite(value) ? value : undefined;
+}
+function newestTimestamp(data: any[], key: string) {
+  if (!Array.isArray(data) || !data.length) return undefined;
+  return data
+    .map((item) => item?.[key])
+    .filter(Boolean)
+    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+    .at(-1) as string | undefined;
+}
+function seriesTrend(data: any[], key: string) {
+  if (!Array.isArray(data) || data.length < 10) return undefined;
+  const ordered = [...data].sort(
+    (a, b) => new Date(a.time_tag).getTime() - new Date(b.time_tag).getTime(),
+  );
+  const size = Math.max(5, Math.floor(ordered.length / 4));
+  const first = ordered
+    .slice(-size * 2, -size)
+    .map((item) => Number(item[key]))
+    .filter(Number.isFinite);
+  const last = ordered
+    .slice(-size)
+    .map((item) => Number(item[key]))
+    .filter(Number.isFinite);
+  if (!first.length || !last.length) return undefined;
+  return average(last) - average(first);
 }
 function average(v: number[]) {
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;

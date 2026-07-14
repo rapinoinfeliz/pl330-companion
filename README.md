@@ -1,6 +1,6 @@
 # PL-330 Companion
 
-Aplicativo web instalável para identificação assistida de emissoras por programação EiBi, diário SWL local-first e acompanhamento de propagação com dados públicos da NOAA SWPC. Correspondências são possibilidades, nunca identificações garantidas.
+Aplicativo web instalável para identificação assistida de emissoras por programação EiBi, catálogo FM local, diário SWL local-first e acompanhamento de propagação com dados públicos da NOAA SWPC. Correspondências são possibilidades, nunca identificações garantidas.
 
 ## Arquitetura
 
@@ -55,6 +55,19 @@ pnpm run deploy
 ```
 
 O endereço esperado é `https://pl330-companion.<seu-subdominio>.workers.dev`. Atualize `APP_ORIGIN` em produção para esse endereço. Os crons estão em UTC no `wrangler.jsonc`; o handler mantém o último snapshot válido.
+
+### Deploy automático a partir do GitHub
+
+Conecte o Worker existente ao repositório em **Workers & Pages → pl330-companion → Settings → Builds → Connect**. Use:
+
+- repositório: `rapinoinfeliz/pl330-companion`;
+- branch de produção: `main`;
+- diretório raiz: `/`;
+- comando de build: `pnpm build`;
+- comando de deploy: `pnpm exec wrangler deploy`;
+- previews de outras branches: `pnpm exec wrangler versions upload`.
+
+Depois da conexão, cada push em `main` atualiza o mesmo Worker e preserva o D1 e os segredos de runtime.
 
 No painel Cloudflare, confira em **Billing > Subscriptions** que apenas o plano Workers Free está ativo; não habilite Workers Paid, R2, Argo, Logpush ou domínio pago. A aplicação usa Static Assets, D1, Workers e Cron Triggers dentro das cotas gratuitas, mas as cotas podem mudar: confira a documentação da Cloudflare antes de publicar grandes bases ou aumentar os crons.
 
