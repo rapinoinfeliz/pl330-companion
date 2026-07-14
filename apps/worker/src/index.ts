@@ -51,11 +51,15 @@ async function fetchEibi(path: string) {
   if (!response.ok) throw new Error(`EiBi HTTP ${response.status}`);
   return response;
 }
+async function readEibiText(path: string) {
+  const response = await fetchEibi(path);
+  return new TextDecoder("windows-1252").decode(await response.arrayBuffer());
+}
 app.post("/api/admin/refresh-noaa", async (c) => authorized(c) ? c.json(await refreshNoaa(c.env.DB)) : fail(c, 401, "UNAUTHORIZED", "Acesso administrativo inválido."));
 app.post("/api/admin/import-eibi", async (c) => {
   if (!authorized(c)) return fail(c, 401, "UNAUTHORIZED", "Acesso administrativo inválido.");
-  const home = await fetchEibi("/").then((r) => r.text()); const season = detectSeason(home); const source = `https://www.eibispace.de/dx/sked-${season.toLowerCase()}.csv`;
-  const csv = await fetchEibi(`/dx/sked-${season.toLowerCase()}.csv`).then((r) => r.text()); if (csv.length > 25_000_000) return fail(c, 413, "IMPORT_TOO_LARGE", "O arquivo EiBi excede o limite.");
+  const home = await readEibiText("/"); const season = detectSeason(home); const source = `https://www.eibispace.de/dx/sked-${season.toLowerCase()}.csv`;
+  const csv = await readEibiText(`/dx/sked-${season.toLowerCase()}.csv`); if (csv.length > 25_000_000) return fail(c, 413, "IMPORT_TOO_LARGE", "O arquivo EiBi excede o limite.");
   const parsed = await parseEibiCsv(csv, season, source); const version = crypto.randomUUID();
   const statements = parsed.rows.map((b) => c.env.DB.prepare("INSERT INTO broadcasts_staging (version, id, season, frequency_khz, start_utc_minutes, end_utc_minutes, days_json, day_expression_original, station_name, country_code, language_code, target_code, transmitter_code, notes, source, source_row_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(version, b.id, b.season, b.frequencyKHz, b.startUtcMinutes, b.endUtcMinutes, JSON.stringify(b.days), b.dayExpressionOriginal, b.stationName, b.countryCode, b.languageCode, b.targetCode, b.transmitterCode, b.notes || null, b.source, b.sourceRowHash, b.updatedAt));
   for (let i = 0; i < statements.length; i += 50) await c.env.DB.batch(statements.slice(i, i + 50));
