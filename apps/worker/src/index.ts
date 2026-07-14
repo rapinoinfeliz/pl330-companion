@@ -73,7 +73,22 @@ app.post("/api/admin/import-eibi", async (c) => {
 });
 
 function hydrate(row: any) { return { ...row, days: JSON.parse(row.daysJson || "[]"), daysJson: undefined }; }
-app.notFound(async (c) => c.env.ASSETS ? c.env.ASSETS.fetch(c.req.raw) : fail(c, 404, "NOT_FOUND", "Recurso não encontrado."));
+app.notFound(async (c) => {
+  if (c.req.path.startsWith("/api/")) return fail(c, 404, "NOT_FOUND", "Recurso não encontrado.");
+  if (!c.env.ASSETS) return fail(c, 404, "NOT_FOUND", "Recurso não encontrado.");
+
+  // Navigation requests need the SPA shell. Asking the asset binding for the
+  // original route can fail on direct visits even with SPA handling enabled.
+  const lastSegment = c.req.path.split("/").at(-1) || "";
+  if (!lastSegment.includes(".")) {
+    const indexUrl = new URL(c.req.url);
+    indexUrl.pathname = "/";
+    indexUrl.search = "";
+    return c.env.ASSETS.fetch(new Request(indexUrl.toString(), c.req.raw));
+  }
+
+  return c.env.ASSETS.fetch(c.req.raw);
+});
 
 export default { fetch: app.fetch, async scheduled(_event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) { ctx.waitUntil(refreshNoaa(env.DB)); } };
 export { app };
