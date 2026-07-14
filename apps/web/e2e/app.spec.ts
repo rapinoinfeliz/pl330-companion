@@ -20,7 +20,7 @@ test("identifica uma emissora FM pelo catálogo local", async ({ page }) => {
 });
 test("consulta o catálogo oficial por cidade e faixa", async ({ page }) => {
   await page.goto("/catalogo");
-  await expect(page.getByText("11.656")).toBeVisible();
+  await expect(page.getByText("18.052")).toBeVisible();
   await page.getByPlaceholder("Nome, cidade, indicativo ou frequência…").fill("Curitibanos");
   await page.getByRole("combobox").first().selectOption("FM");
   await expect(page.getByText("FUNDACAO FREI ROGERIO", { exact: true })).toHaveCount(2);

@@ -76,7 +76,7 @@ const nav = [
 ] as const;
 
 type FrequencyUnit = "kHz" | "MHz";
-type CatalogBand = "FM" | "MW" | "SW";
+type CatalogBand = "LW" | "MW" | "SW" | "FM";
 type CatalogStation = {
   id: string;
   name: string;
@@ -102,6 +102,24 @@ const loadRadioCatalog = () =>
     if (!response.ok) throw new Error("Catálogo de rádios indisponível.");
     return response.json() as Promise<RadioCatalog>;
   });
+const TUNING_GUIDE = [
+  { range: "153–513 kHz", title: "Balizas NDB", mode: "AM/CW", note: "Radionavegação; identificação em código Morse." },
+  { range: "520–1.710 kHz", title: "Radiodifusão MW", mode: "AM", note: "Emissoras regionais; alcance costuma aumentar à noite." },
+  { range: "1.800–2.000 kHz", title: "Radioamador 160 m", mode: "LSB/CW", note: "Atividade local e regional, sobretudo noturna." },
+  { range: "2.182 kHz", title: "Chamada marítima", mode: "USB", note: "Frequência internacional de voz para socorro e segurança." },
+  { range: "2.500 · 5.000 · 10.000 · 15.000 · 20.000 kHz", title: "WWV / WWVH", mode: "AM", note: "Hora e frequência padrão do NIST." },
+  { range: "3.500–4.000 kHz", title: "Radioamador 80 m", mode: "LSB/CW", note: "Conversas e redes regionais, geralmente à noite." },
+  { range: "4.125 · 6.215 · 8.291 · 12.290 · 16.420 kHz", title: "Segurança marítima HF", mode: "USB", note: "Voz de socorro e segurança; nem todas são guardadas continuamente." },
+  { range: "5.351,5–5.366,5 kHz", title: "Radioamador 60 m", mode: "USB/CW", note: "A autorização e os canais variam por país." },
+  { range: "7.000–7.300 kHz", title: "Radioamador 40 m", mode: "LSB/CW", note: "Uma das faixas mais ativas para contatos regionais e DX." },
+  { range: "10.100–10.150 kHz", title: "Radioamador 30 m", mode: "CW/digital", note: "Faixa estreita voltada a CW e modos digitais." },
+  { range: "14.000–14.350 kHz", title: "Radioamador 20 m", mode: "USB/CW", note: "Principal faixa de contatos internacionais durante o dia." },
+  { range: "18.068–18.168 kHz", title: "Radioamador 17 m", mode: "USB/CW", note: "DX diurno em condições favoráveis." },
+  { range: "21.000–21.450 kHz", title: "Radioamador 15 m", mode: "USB/CW", note: "DX diurno dependente da atividade solar." },
+  { range: "24.890–24.990 kHz", title: "Radioamador 12 m", mode: "USB/CW", note: "Pode abrir para longas distâncias com Sol favorável." },
+  { range: "26.965–27.405 kHz", title: "Rádio do Cidadão / PX", mode: "AM/SSB", note: "40 canais; atividade local e aberturas ocasionais." },
+  { range: "28.000–29.700 kHz", title: "Radioamador 10 m", mode: "USB/CW/FM", note: "O PL-330 recebe AM/SSB; não demodula FM estreita corretamente." },
+] as const;
 type IdentifyForm = Omit<SearchInput, "frequencyKHz"> & {
   frequency: number;
   unit: FrequencyUnit;
@@ -1051,15 +1069,37 @@ function Catalog() {
   );
   return (
     <>
-      <Title eyebrow="Dados abertos MCom/Anatel" title="Catálogo de rádios" />
+      <Title eyebrow="MCom/Anatel · EiBi · OurAirports · NIST" title="Catálogo de rádios" />
       <div className="grid gap-3 sm:grid-cols-3">
         <Metric label="Estações catalogadas" value={catalog.data?.count.toLocaleString("pt-BR") || "—"} />
-        <Metric label="Faixas" value="FM · MW · SW" />
+        <Metric label="Faixas" value="LW · MW · SW · FM" />
         <Metric
           label="Atualização da fonte"
           value={catalog.data ? new Date(catalog.data.generatedAt).toLocaleDateString("pt-BR") : "—"}
         />
       </div>
+      <details className="panel mt-5 p-5">
+        <summary className="cursor-pointer font-bold">
+          Guia completo de faixas e atividades do PL-330
+        </summary>
+        <p className="mt-2 text-sm muted">
+          Além de estações fixas, estas são atividades que podem aparecer no dial. Escute apenas; transmitir exige licença e equipamento apropriado.
+        </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {TUNING_GUIDE.map((entry) => (
+            <div key={`${entry.range}-${entry.title}`} className="rounded-xl border border-white/10 p-4">
+              <div className="flex flex-wrap justify-between gap-2">
+                <b>{entry.title}</b><span className="chip">{entry.mode}</span>
+              </div>
+              <p className="frequency mt-2 text-mint">{entry.range}</p>
+              <p className="mt-2 text-xs muted">{entry.note}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-4 text-xs muted">
+          As subfaixas de radioamador seguem a referência IARU Região 2; regras nacionais prevalecem. O PL-330 recebe AM, SSB, SYNC e CW por batimento, mas não decodifica modos digitais sozinho.
+        </p>
+      </details>
       <Card className="mt-5">
         <div className="grid gap-3 md:grid-cols-[1fr_160px_140px]">
           <input
@@ -1070,12 +1110,13 @@ function Catalog() {
           />
           <select className="input" value={band} onChange={(event) => setBand(event.target.value as "ALL" | CatalogBand)}>
             <option value="ALL">Todas as faixas</option>
+            <option value="LW">Ondas longas / NDB</option>
             <option value="FM">FM</option>
             <option value="MW">Ondas médias</option>
             <option value="SW">Ondas curtas</option>
           </select>
           <select className="input" value={state} onChange={(event) => setState(event.target.value)}>
-            <option value="">Todo o Brasil</option>
+            <option value="">Todas as regiões</option>
             {states.map((uf) => <option key={uf}>{uf}</option>)}
           </select>
         </div>
@@ -2008,11 +2049,12 @@ function About() {
           </p>
         </Card>
         <Card>
-          <h2 className="font-bold">Catálogo brasileiro de radiodifusão</h2>
+          <h2 className="font-bold">Catálogo técnico multifaixa</h2>
           <p className="mt-3 text-sm muted">
             FM, retransmissoras FM, rádios comunitárias, ondas médias e estações
             brasileiras de ondas curtas/tropicais vêm dos dados abertos do
-            Ministério das Comunicações e da Anatel. A atualização é mensal.
+            Ministério das Comunicações e da Anatel. Balizas NDB mundiais vêm
+            do OurAirports e sinais horários do NIST. A atualização é mensal.
           </p>
           <a
             className="mt-4 inline-block text-mint underline"

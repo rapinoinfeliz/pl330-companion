@@ -98,6 +98,9 @@ docs                  decisões técnicas e operação
 
 - [EiBi](https://www.eibispace.de/) — programação gratuita, com atribuição.
 - [Ministério das Comunicações](https://www.gov.br/mcom/pt-br/acesso-a-informacao/dados-abertos) — bases abertas SCR, RADCOM e SRD para FM, ondas médias e estações OC/OT.
+- [OurAirports](https://ourairports.com/data/) — balizas NDB mundiais em dados de domínio público.
+- [NIST](https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwv) — frequências oficiais WWV/WWVH.
+- [IARU Região 2](https://www.iaru-r2.org/en/reference/band-plans/) — referência para faixas de radioamador.
 - [NOAA SWPC](https://www.swpc.noaa.gov/) — Kp, F10.7, escalas e alertas públicos.
 - Stack integralmente gratuita e de código aberto; licença MIT.
 

@@ -16,13 +16,14 @@ SOURCES = {
     "scr": "https://s3.mcom.gov.br/radcom/SCR_DADOS_RADIODIFUSAO_TV_GTVD_RTV_RTVD_FM_OM.csv",
     "radcom": "https://s3.mcom.gov.br/radcom/rep_srd_radcomsl.csv",
     "srd": "https://s3.mcom.gov.br/radcom/rep_srd_estacao_dados_abertos.csv",
+    "navaids": "https://davidmegginson.github.io/ourairports-data/navaids.csv",
 }
 
 
-def download(url):
+def download(url, encoding="latin-1"):
     request = urllib.request.Request(url, headers={"User-Agent": "PL-330-Companion/1.0"})
     with urllib.request.urlopen(request, timeout=180) as response:
-        return response.read().decode("latin-1", errors="replace")
+        return response.read().decode(encoding, errors="replace")
 
 
 def number(value):
@@ -150,6 +151,50 @@ def build():
         if latitude is not None: item["latitude"] = round(latitude, 6)
         if longitude is not None: item["longitude"] = round(longitude, 6)
         add(stations, seen, item)
+
+    navaids_text = download(SOURCES["navaids"], "utf-8")
+    for row in csv.DictReader(io.StringIO(navaids_text)):
+        if row.get("type") != "NDB":
+            continue
+        frequency = number(row.get("frequency_khz"))
+        if frequency is None or not 153 <= frequency <= 1710:
+            continue
+        band = "LW" if frequency <= 513 else "MW"
+        name = clean(row.get("name")) or clean(row.get("ident")) or "Baliza NDB"
+        item = {
+            "name": f"{name} NDB",
+            "frequencyKHz": round(frequency, 1),
+            "band": band,
+            "mode": "AM",
+            "city": clean(row.get("associated_airport")),
+            "state": "",
+            "country": clean(row.get("iso_country")),
+            "status": f"Baliza de radionavegação · potência {clean(row.get('power')) or 'não informada'}",
+            "callsign": clean(row.get("ident")),
+            "sourceLabel": "OurAirports — NDB aberto",
+        }
+        latitude, longitude = number(row.get("latitude_deg")), number(row.get("longitude_deg"))
+        if latitude is not None: item["latitude"] = round(latitude, 6)
+        if longitude is not None: item["longitude"] = round(longitude, 6)
+        add(stations, seen, item)
+
+    for name, frequencies in {
+        "WWV": [2500, 5000, 10000, 15000, 20000],
+        "WWVH": [2500, 5000, 10000, 15000],
+    }.items():
+        for frequency in frequencies:
+            add(stations, seen, {
+                "name": f"{name} — hora e frequência padrão",
+                "frequencyKHz": frequency,
+                "band": "SW",
+                "mode": "AM",
+                "city": "Fort Collins" if name == "WWV" else "Kauai",
+                "state": "CO" if name == "WWV" else "HI",
+                "country": "Estados Unidos",
+                "status": "Transmissão contínua 24 horas",
+                "callsign": name,
+                "sourceLabel": "NIST — sinal horário oficial",
+            })
 
     stations.sort(key=lambda item: (item["frequencyKHz"], item.get("state", ""), item.get("city", ""), item["name"]))
     generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
