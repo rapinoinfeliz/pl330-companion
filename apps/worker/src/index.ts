@@ -84,10 +84,12 @@ app.notFound(async (c) => {
     const indexUrl = new URL(c.req.url);
     indexUrl.pathname = "/";
     indexUrl.search = "";
-    return c.env.ASSETS.fetch(new Request(indexUrl.toString(), c.req.raw));
+    const asset = await c.env.ASSETS.fetch(new Request(indexUrl.toString(), c.req.raw));
+    return new Response(asset.body, asset);
   }
 
-  return c.env.ASSETS.fetch(c.req.raw);
+  const asset = await c.env.ASSETS.fetch(c.req.raw);
+  return new Response(asset.body, asset);
 });
 
 export default { fetch: app.fetch, async scheduled(_event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) { ctx.waitUntil(refreshNoaa(env.DB)); } };
